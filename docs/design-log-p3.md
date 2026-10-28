@@ -4,15 +4,14 @@ Kedaar Vignesh. P2 code used: my own, copied over unchanged. Tools used:
 Claude Code (Anthropic's AI assistant) wrote the first versions of
 `ToolRegistry`, `Workspace::resolve`, `calc_evaluate`, the tests and this
 log from the spec, and ran the builds and a mutation check (g++ 13,
-ASan + UBSan, `-Werror`, Ubuntu 24.04 on WSL2).
+ASan + UBSan, `-Werror`, WSL2).
 
 ## Hash table: strategy, hash, and amortized cost
 
 `ToolRegistry` uses separate chaining: each bucket is a `std::vector` of
 entries. A crowded bucket doesn't slow its neighbours the way a
-linear-probing cluster does, a lookup that misses ends at the end of one
-short chain, and the table can never fill up, so there is no "threshold
-must stay below 1" rule to get wrong.
+linear-probing cluster does, and the table can never fill up, so there is
+no "threshold must stay below 1" rule to get wrong.
 
 The hash is 64-bit FNV-1a, returned at full width. The index is
 `hash & (bucket_count - 1)`, valid because the bucket count starts at 8
@@ -23,12 +22,12 @@ names only when the hashes already match.
 
 The load-factor threshold is 3/4, checked *before* inserting: if
 `(size + 1) * 4 > buckets * 3`, `grow()` doubles the array and re-inserts
-every entry at its new index. Integer math avoids float rounding, and 3/4
-buys shorter chains for a few extra empty buckets. `grow()` reserves
+every entry at its new index. 3/4 buys shorter chains for a few extra empty
+buckets. `grow()` reserves
 every new bucket before moving anything, so a failed allocation can't
 leave tools half-moved.
 
-Measured on `tool_0` … `tool_9999` (from `./build/test_p3`):
+Measured on `tool_0` … `tool_9999`:
 
 ```
 16384 buckets, load factor 0.610
@@ -39,8 +38,7 @@ Measured on `tool_0` … `tool_9999` (from `./build/test_p3`):
 
 The weak hash produces only four distinct values ('t' plus a length of 6
 to 9), so all 9,000 nine-character names land in one bucket. FNV-1a's 6
-is well under the limit of 64, and a recount inside the test matches
-`max_probe_length()`.
+is well under the limit of 64.
 
 **Claim:** over `n` calls to `add`, the total work spent resizing is
 `O(n)`, so each `add` is `O(1)` amortized.
@@ -60,10 +58,8 @@ moves entries from one vector to another, but moving a `unique_ptr`
 copies only the address it holds, so the `Tool` object stays on the heap
 exactly where `make_unique` put it. `find()` returns `tool.get()` — the
 address of the `Tool`, never the address of an `Entry` or a bucket, which
-are the things that actually move. `reg_pointers_survive_resize` and
-`reg_10000_tools` check this by comparing the pointer taken at insertion
-with what `find` returns after the table has grown from 8 to 16,384
-buckets.
+are the things that actually move. `reg_10000_tools` checks it across growth from 8 to
+16,384 buckets.
 
 ## Calculator trace: `2 * (3 + 4) - 5`
 
@@ -84,8 +80,7 @@ end     apply -: pop 5, 14, push 9                 9
 
 The `*` waits on the stack through the whole parenthesis because the `(`
 above it blocks anything inside from reaching it; it only runs when the
-`-` arrives. The same `>=` is what makes `10 - 4 - 3` come out as 3: the
-first `-` is applied the moment the second one shows up.
+`-` arrives. The same `>=` makes `10 - 4 - 3` come out as 3.
 
 ## Errors as values
 
@@ -95,14 +90,11 @@ the message and try something else, so a failure is just more data headed
 for the conversation. Returning `ToolResult::failure(...)`, or `false`
 plus a message from `resolve` and `calc_evaluate`, keeps it on the normal
 path: the dispatcher writes `"ok":false`, appends it, and the loop goes
-on. Nothing unwinds past the dispatcher, and no tool author can forget a
-`catch`.
+on. Nothing unwinds past the dispatcher.
 
 Exceptions are for programmer errors, like `as_string()` on a JSON
 number, or for running out of memory. Those mean the program is wrong or
-can't continue, and failing loudly beats handing the model a made-up
-answer. The dispatcher's catch-all is a backstop for a buggy tool, not
-the usual route.
+can't continue, and failing loudly beats a made-up answer. The dispatcher's catch-all is only a backstop.
 
 ## What I would change differently
 
@@ -110,5 +102,4 @@ A vector per bucket is wasteful at scale. An empty `std::vector` is 24
 bytes, so 16,384 buckets spend about 390 KB on headers for 10,000 tools,
 and each entry copies the tool's name because `Tool::name()` returns by
 value. A flat open-addressing array of `unique_ptr<Tool>` slots would cut
-both, at the cost of clustering risk. I'd measure before switching; with
-four tools it makes no difference.
+both, at the cost of clustering risk. With four tools it makes no difference.
